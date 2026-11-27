@@ -1,0 +1,31 @@
+{
+  "games": {
+    "bf": {
+      "name": "Become Fumo",
+      "place_id": 6238705697,
+      "mode": "single_server",
+      "join_url": "",
+      "fumocam_user_id": null
+    },
+    "sbf": {
+      "name": "Scuffed Become Fumo",
+      "place_id": 7363647365,
+      "mode": "single_server",
+      "join_url": "",
+      "fumocam_user_id": null
+    }
+  },
+  "aliases": {},
+  "public_role_ids": [],
+  "public_cooldown_seconds": 0,
+  "private_cooldown_seconds": 0,
+  "max_private_recipients": 10,
+  "appearance": {
+    "color": "7C83FD",
+    "title": "{game}",
+    "attendance_button": "Join",
+    "locked_button": "Closed",
+    "empty_list": "No attendees yet.",
+    "image_url": ""
+  }
+}
