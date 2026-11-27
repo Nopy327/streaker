@@ -1,0 +1,63 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/.vinext/
+/out/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# local environment
+.env*
+# Bot credentials, Discord IDs, saved cards, spectator codes, and uploads.
+# Also exclude copies/backups of the private runtime directory.
+.discord-bot*/
+tracker-state*.json
+delivery-state*.json
+subscriptions*.json
+card-management*.json
+spectate-state*.json
+discord-config*.json
+*.key
+*.p12
+*.pfx
+*.sqlite*
+*.db
+*.db-*
+
+# Logs, local backups, and compiler caches
+*.log
+*.bak
+*.backup
+*.tmp
+*.tsbuildinfo
+/.cache/
+/backups/
+/logs/
+
+# deployment and generated files
+.vercel
+next-env.d.ts
+/dist/
+/.wrangler/
+/outputs/
+/work/
