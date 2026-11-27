@@ -48,7 +48,7 @@ import {
 } from './discord-attachments.mjs';
 
 const APP_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
-const DATA_DIR = join(APP_DIR, '.discord-bot');
+const DATA_DIR = process.env.STREAKER_DATA_DIR || join(APP_DIR, '.discord-bot');
 const management = createCardManagement(DATA_DIR);
 const spectators = createSpectateStore(DATA_DIR);
 let gatewayOnline = false;
@@ -95,20 +95,15 @@ function writeJsonAtomic(path, value) {
 
 function loadConfig() {
   const token = process.env.DISCORD_TOKEN?.trim();
-
   if (token) {
     if (token.length < 20) return null;
     return { botToken: token };
   }
-
   const value = readJson(CONFIG_PATH, null);
-
   if (!value || typeof value !== 'object') return null;
-
   if (typeof value.botToken !== 'string' || value.botToken.length < 20) {
     return null;
   }
-
   return { botToken: value.botToken };
 }
 
@@ -710,7 +705,7 @@ async function startDiscordGateway(config) {
           op: 2,
           d: {
             token: config.botToken,
-            intents: 0,
+            intents: 1 << 12, // DIRECT_MESSAGES
             properties: { os: 'macos', browser: 'streak-tracker', device: 'streak-tracker' },
             presence: {
               since: null,
@@ -725,6 +720,15 @@ async function startDiscordGateway(config) {
         socket.send(JSON.stringify({ op: 1, d: sequence }));
       }
       if (packet.t === 'READY') { gatewayOnline = true; console.log(`Discord bot connected as ${packet.d.user.username}.`); }
+      if (packet.t === 'MESSAGE_CREATE') {
+        const message = packet.d;
+        const owner = process.env.STREAKER_OWNER_ID?.trim();
+        if (!message.guild_id && !message.author?.bot && owner && message.author?.id === owner && process.send) {
+          const packages = (message.attachments ?? []).filter(a => a.filename?.endsWith('.streaker.json'));
+          if (packages.length === 1) process.send({ type: 'streaker-import', authorId: message.author.id,
+            channelId: message.channel_id, attachment: packages[0] });
+        }
+      }
       if (packet.t === 'INTERACTION_CREATE') {
         void handleInteraction(config, packet.d).catch((error) => console.error(friendlyDiscordError(error)));
       }

@@ -1,5 +1,4 @@
-import { createServer } from 'node:http';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, renameSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
@@ -80,8 +79,10 @@ if (process.argv[2] === '--check') {
   process.exit(0);
 }
 
-const token = process.env.STREAKER_SYNC_TOKEN;
-if (!token || token.length < 32) throw Error('Set STREAKER_SYNC_TOKEN to a strong secret.');
+const owner = process.env.STREAKER_OWNER_ID?.trim();
+const token = process.env.DISCORD_TOKEN?.trim();
+if (!/^\d{17,20}$/.test(owner ?? '')) throw Error('Set STREAKER_OWNER_ID to your Discord user ID.');
+if (!token) throw Error('Set DISCORD_TOKEN.');
 mkdirSync(STORAGE, { recursive: true, mode: 0o700 });
 if (!existsSync(CURRENT) && existsSync(PREVIOUS)) renameSync(PREVIOUS, CURRENT);
 let bot = null;
@@ -89,11 +90,14 @@ let busy = false;
 let stopping = false;
 
 function startBot() {
-  if (bot || !existsSync(join(CURRENT, MARKER))) return;
+  if (bot) return;
+  mkdirSync(CURRENT, { recursive: true, mode: 0o700 });
   bot = spawn(process.execPath, ['--experimental-strip-types', 'scripts/discord-streak-bot.mjs'], {
-    cwd: ROOT, stdio: 'inherit', env: process.env
+    cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    env: { ...process.env, STREAKER_DATA_DIR: CURRENT }
   });
   const child = bot;
+  child.on('message', message => { if (child === bot) void handleImport(message); });
   child.on('error', () => { console.error('Bot failed to start.'); process.exit(1); });
   child.on('exit', () => {
     if (bot === child) bot = null;
@@ -152,40 +156,49 @@ async function install(pkg) {
   }
 }
 
-function reply(response, status, body) {
-  response.writeHead(status, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}).end(JSON.stringify(body));
+async function reply(channel, content) {
+  const res = await fetch(`https://discord.com/api/v10/channels/${channel}/messages`, {
+    method: 'POST', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'DiscordBot (https://discord.com/developers/applications, 1.0.0)' },
+    body: JSON.stringify({ content, allowed_mentions: { parse: [] } }), signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) throw Error(`Discord reply failed: ${res.status}`);
 }
 
-const server = createServer(async (request, response) => {
-  if (request.method === 'GET' && request.url === '/health') return reply(response, 200, {ok: true});
-  if (request.method !== 'POST' || request.url !== '/sync') return reply(response, 404, {error: 'Not found.'});
-  const supplied = String(request.headers.authorization || '');
-  if (!timingSafeEqual(Buffer.from(sha(supplied)), Buffer.from(sha(`Bearer ${token}`)))) return reply(response, 401, {error: 'Unauthorized.'});
-  if (busy) return reply(response, 409, {error: 'An import is already running.'});
-  if (!String(request.headers['content-type']).startsWith('application/json')) return reply(response, 415, {error: 'Use application/json.'});
+async function download(attachment) {
+  if (!attachment || typeof attachment.filename !== 'string' || !attachment.filename.endsWith('.streaker.json') ||
+      !Number.isSafeInteger(attachment.size) || attachment.size < 1 || attachment.size > MAX) throw Error('Invalid or oversized package.');
+  const url = new URL(attachment.url);
+  if (url.protocol !== 'https:' || !['cdn.discordapp.com', 'media.discordapp.net'].includes(url.hostname) ||
+      url.port || url.username || url.password || !url.pathname.startsWith('/attachments/')) throw Error('Invalid attachment URL.');
+  const res = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(120_000) });
+  if (!res.ok || !res.body) throw Error('Download failed.');
+  const chunks = []; let size = 0;
+  for await (const chunk of res.body) {
+    size += chunk.length;
+    if (size > MAX || size > attachment.size) throw Error('Package exceeds size limit.');
+    chunks.push(chunk);
+  }
+  if (size !== attachment.size) throw Error('Incomplete download.');
+  return Buffer.concat(chunks, size);
+}
+
+async function handleImport(message) {
+  if (message?.type !== 'streaker-import' || message.authorId !== owner || !/^\d{17,20}$/.test(message.channelId ?? '')) return;
+  const channel = message.channelId;
+  if (busy) { await reply(channel, 'An import is already running.').catch(() => {}); return; }
   busy = true;
   try {
-    let size = 0;
-    const chunks = [];
-    for await (const chunk of request) {
-      size += chunk.length;
-      if (size > MAX) { reply(response, 413, {error: 'Package too large.'}); return; }
-      chunks.push(chunk);
-    }
+    const bytes = await download(message.attachment);
     let pkg;
-    try { pkg = validate(Buffer.concat(chunks)); }
-    catch { return reply(response, 400, {error: 'Invalid or incomplete package.'}); }
-    try { await install(pkg); }
-    catch (error) {
-      if (error.message === 'Package is not newer than current data.') return reply(response, 409, {error: error.message});
-      console.error('Package installation failed.');
-      return reply(response, 500, {error: 'Import failed.'});
-    }
-    reply(response, 200, {ok: true, files: pkg.files.size, exportedAt: pkg.exportedAt});
-  } catch { if (!response.headersSent) reply(response, 400, {error: 'Upload interrupted.'}); }
-  finally { busy = false; }
-});
-server.requestTimeout = 120000;
-server.listen(Number(process.env.PORT || 8080), '0.0.0.0');
+    try { pkg = validate(bytes); } catch { throw Error('Invalid or incomplete Streaker package.'); }
+    await install(pkg);
+    await reply(channel, `Synchronization successful. Imported ${pkg.files.size} files. Streaker is restarting.`).catch(() => console.error('Import completed, but confirmation failed.'));
+  } catch (error) {
+    const safe = ['Package is not newer than current data.', 'Invalid or incomplete Streaker package.', 'Invalid or oversized package.', 'Download failed.', 'Incomplete download.', 'Package exceeds size limit.', 'Invalid attachment URL.'];
+    await reply(channel, `Synchronization failed: ${safe.includes(error.message) ? error.message : 'Import failed.'}`).catch(() => {});
+    console.error('Synchronization failed.');
+  } finally { busy = false; }
+}
+
 startBot();
-for (const signal of ['SIGINT','SIGTERM']) process.on(signal, async () => { await stopBot(); server.close(() => process.exit(0)); });
+for (const signal of ['SIGINT','SIGTERM']) process.on(signal, async () => { await stopBot(); process.exit(0); });
