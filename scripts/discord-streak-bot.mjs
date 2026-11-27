@@ -94,11 +94,21 @@ function writeJsonAtomic(path, value) {
 }
 
 function loadConfig() {
+  const token = process.env.DISCORD_TOKEN?.trim();
+
+  if (token) {
+    if (token.length < 20) return null;
+    return { botToken: token };
+  }
+
   const value = readJson(CONFIG_PATH, null);
+
   if (!value || typeof value !== 'object') return null;
+
   if (typeof value.botToken !== 'string' || value.botToken.length < 20) {
     return null;
   }
+
   return { botToken: value.botToken };
 }
 
