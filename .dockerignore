@@ -1,7 +1,12 @@
+.git
 .env
+.env.*
+node_modules
+.discord-bot
+.next
+dist
+.DS_Store
+*.log
 .venv
 __pycache__
-data
 *.sqlite3*
-.git
-tests
